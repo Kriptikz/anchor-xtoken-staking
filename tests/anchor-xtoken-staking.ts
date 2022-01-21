@@ -13,16 +13,18 @@ describe('anchor-xtoken-staking', () => {
   const program = anchor.workspace.AnchorXtokenStaking as Program<AnchorXtokenStaking>;
 
   // Initial Mint amount
-  const MINT_A_AMOUNT = 1_000_000;
+  const MINT_A_AMOUNT = 300;
 
   // Amount to Stake
-  const AMOUNT_TO_STAKE = 200;
+  const AMOUNT_TO_STAKE_USER1 = 200;
+  const AMOUNT_TO_STAKE_USER2 = 75;
 
   // Amount to Reward to stake pool
-  const AMOUNT_TO_REWARD = 200;
+  const AMOUNT_TO_REWARD = 100;
 
   // User Keypair
   const user1 = anchor.web3.Keypair.generate();
+  const user2 = anchor.web3.Keypair.generate();
 
   // Payer Keypair
   const payer = anchor.web3.Keypair.generate();
@@ -40,6 +42,9 @@ describe('anchor-xtoken-staking', () => {
   // Associated Token Accounts for users
   let user1TokenAAccount;
   let user1xTokenAAccount;
+
+  let user2TokenAAccount;
+  let user2xTokenAAccount;
 
   // Program Token Stake Vault PDA
   let pdaStakeVaultTokenAAddress;
@@ -63,12 +68,20 @@ describe('anchor-xtoken-staking', () => {
       TOKEN_PROGRAM_ID,
     );
 
-    // Create our user1 Token A Account
+    // Create our users Token A Accounts
     user1TokenAAccount = await mintA.createAccount(user1.publicKey);
+    user2TokenAAccount = await mintA.createAccount(user2.publicKey);
 
-    // Mint some Token A to user1TokenAAccount
+    // Mint some Token A to users
     await mintA.mintTo(
       user1TokenAAccount,
+      payer.publicKey,
+      [payer],
+      MINT_A_AMOUNT,
+    );
+
+    await mintA.mintTo(
+      user2TokenAAccount,
       payer.publicKey,
       [payer],
       MINT_A_AMOUNT,
@@ -97,6 +110,7 @@ describe('anchor-xtoken-staking', () => {
           accounts: {
             xMint: pdaxMintAAddress,
             mint: mintA.publicKey,
+            stakeVault: pdaStakeVaultTokenAAddress,
             payer: payer.publicKey,
             tokenProgram: TOKEN_PROGRAM_ID,
             systemProgram: anchor.web3.SystemProgram.programId,
@@ -119,10 +133,135 @@ describe('anchor-xtoken-staking', () => {
     let user1xTokenAAccountOwner = (await provider.connection.getAccountInfo(user1TokenAAccount)).owner;
     //console.log("User1 xToken Account Owner: ", user1xTokenAAccountOwner.toString());
     assert.equal(user1xTokenAAccountOwner.toString(), TOKEN_PROGRAM_ID.toString());
+
+    user2xTokenAAccount = await xMintA.createAccount(user2.publicKey)
+    let user2xTokenAAccountOwner = (await provider.connection.getAccountInfo(user2TokenAAccount)).owner;
+    //console.log("User2 xToken Account Owner: ", user1xTokenAAccountOwner.toString());
+    assert.equal(user2xTokenAAccountOwner.toString(), TOKEN_PROGRAM_ID.toString());
   });
 
-  it('Stake Tokens', async () => {
+  it('Stake Tokens with User1', async () => {
+    await provider.connection.confirmTransaction(
+      await program.rpc.stake(
+        pdaxMintABump,
+        new anchor.BN(AMOUNT_TO_STAKE_USER1),
+        {
+          accounts: {
+            xMint: pdaxMintAAddress,
+            mint: mintA.publicKey,
+            staker: user1.publicKey,
+            stakerTokenAccount: user1TokenAAccount,
+            stakerXTokenAccount: user1xTokenAAccount,
+            stakeVault: pdaStakeVaultTokenAAddress,
+            tokenProgram: TOKEN_PROGRAM_ID,
+          },
+          signers: [user1]
+        }
+      )
+    );
+
+    // Get the amount of xTokens in user1's xToken Account
+    let user1xTokenAAmount = (await xMintA.getAccountInfo(user1xTokenAAccount)).amount.toNumber();
+    console.log("User1 xToken Amount: ", user1xTokenAAmount);
+    assert.equal(user1xTokenAAmount, AMOUNT_TO_STAKE_USER1);
+
+    // Get the amount of Tokens in the Stake Vault
+    let pdaStakeVaultTokenAAmount = (await mintA.getAccountInfo(pdaStakeVaultTokenAAddress)).amount.toNumber();
+    console.log("Stake Vault Token Amount: ", pdaStakeVaultTokenAAmount);
+    assert.equal(pdaStakeVaultTokenAAmount, AMOUNT_TO_STAKE_USER1);
+
+  });
+
+  it('Deposit Rewards to Stake Vault', async () => {
+    await mintA.mintTo(
+      pdaStakeVaultTokenAAddress,
+      payer.publicKey,
+      [payer],
+      AMOUNT_TO_REWARD,
+    );
     
+    // Get the amount of Tokens in the Stake Vault
+    let pdaStakeVaultTokenAAmount = (await mintA.getAccountInfo(pdaStakeVaultTokenAAddress)).amount.toNumber();
+    console.log("Stake Vault Amount: ", pdaStakeVaultTokenAAmount);
+    assert.equal(pdaStakeVaultTokenAAmount, AMOUNT_TO_STAKE_USER1 + AMOUNT_TO_REWARD);
+
+  });
+
+  it('Stake Tokens with User2', async () => {
+    // Calculate amount of user2's xTokens they recieve for staking
+    const TOTAL_STAKE_AMOUNT = (await mintA.getAccountInfo(pdaStakeVaultTokenAAddress)).amount.toNumber();
+    const TOTAL_MINTED_XTOKENS = (await xMintA.getMintInfo()).supply.toNumber();
+    const USER2_X_TOKENS_FOR_STAKE = AMOUNT_TO_STAKE_USER2 / (TOTAL_STAKE_AMOUNT / TOTAL_MINTED_XTOKENS);
+
+    await provider.connection.confirmTransaction(
+      await program.rpc.stake(
+        pdaxMintABump,
+        new anchor.BN(AMOUNT_TO_STAKE_USER2),
+        {
+          accounts: {
+            xMint: pdaxMintAAddress,
+            mint: mintA.publicKey,
+            staker: user2.publicKey,
+            stakerTokenAccount: user2TokenAAccount,
+            stakerXTokenAccount: user2xTokenAAccount,
+            stakeVault: pdaStakeVaultTokenAAddress,
+            tokenProgram: TOKEN_PROGRAM_ID,
+          },
+          signers: [user2]
+        }
+      )
+    );
+    
+
+    // Get the amount of xTokens in user1's xToken Account
+    let user2xTokenAAmount = (await xMintA.getAccountInfo(user2xTokenAAccount)).amount.toNumber();
+    console.log("User2 xToken Amount: ", user2xTokenAAmount);
+    assert.equal(user2xTokenAAmount, USER2_X_TOKENS_FOR_STAKE);
+
+    const AMOUNT_IN_STAKE_VAULT = AMOUNT_TO_STAKE_USER1 + AMOUNT_TO_STAKE_USER2 + AMOUNT_TO_REWARD;
+
+    // Get the amount of Tokens in the Stake Vault
+    let pdaStakeVaultTokenAAmount = (await mintA.getAccountInfo(pdaStakeVaultTokenAAddress)).amount.toNumber();
+    console.log("Stake Vault Token Amount: ", pdaStakeVaultTokenAAmount);
+    assert.equal(pdaStakeVaultTokenAAmount, AMOUNT_IN_STAKE_VAULT);
+
+  });
+
+  it('Unstake Tokens with User1', async () => {
+    // Calculate amount of user1's Tokens they recieves for unstaking
+    const TOTAL_STAKE_AMOUNT = (await mintA.getAccountInfo(pdaStakeVaultTokenAAddress)).amount.toNumber();
+    const TOTAL_MINTED_XTOKENS = (await xMintA.getMintInfo()).supply.toNumber();
+    const USER2_TOKEN_AMOUNT_WITHDRAWN = AMOUNT_TO_STAKE_USER1 * (TOTAL_STAKE_AMOUNT / TOTAL_MINTED_XTOKENS);
+
+    await provider.connection.confirmTransaction(
+      await program.rpc.unstake(
+        pdaStakeVaultTokenABump,
+        new anchor.BN(AMOUNT_TO_STAKE_USER1),
+        {
+          accounts: {
+            xMint: pdaxMintAAddress,
+            mint: mintA.publicKey,
+            staker: user1.publicKey,
+            stakerTokenAccount: user1TokenAAccount,
+            stakerXTokenAccount: user1xTokenAAccount,
+            stakeVault: pdaStakeVaultTokenAAddress,
+            tokenProgram: TOKEN_PROGRAM_ID,
+          },
+          signers: [user1]
+        }
+      )
+    );
+
+    // Get the amount of xTokens in user1's xToken Account
+    let user1xTokenAAmount = (await xMintA.getAccountInfo(user1xTokenAAccount)).amount.toNumber();
+    console.log("User1 xToken Amount: ", user1xTokenAAmount);
+    assert.equal(user1xTokenAAmount, 0);
+
+    // Get the amount of Tokens in the Stake Vault
+    let pdaStakeVaultTokenAAmount = (await mintA.getAccountInfo(pdaStakeVaultTokenAAddress)).amount.toNumber();
+    console.log("Stake Vault Token Amount: ", pdaStakeVaultTokenAAmount);
+    assert.equal(pdaStakeVaultTokenAAmount, TOTAL_STAKE_AMOUNT - USER2_TOKEN_AMOUNT_WITHDRAWN);
+
   });
 
 });
